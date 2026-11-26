@@ -62,9 +62,9 @@ func saveValidatedImage(c *gin.Context, prefix string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, copyErr := io.Copy(out, io.LimitReader(file, maxImageBytes+1))
+	copied, copyErr := io.Copy(out, io.LimitReader(file, maxImageBytes+1))
 	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil {
+	if copied > maxImageBytes || copyErr != nil || closeErr != nil {
 		_ = os.Remove(filepath.Join(dir, filename))
 		if copyErr != nil { return "", copyErr }
 		return "", closeErr
