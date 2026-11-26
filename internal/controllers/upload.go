@@ -67,6 +67,7 @@ func saveValidatedImage(c *gin.Context, prefix string) (string, error) {
 	if copied > maxImageBytes || copyErr != nil || closeErr != nil {
 		_ = os.Remove(filepath.Join(dir, filename))
 		if copyErr != nil { return "", copyErr }
+		if copied > maxImageBytes { return "", errors.New("image exceeds size limit") }
 		return "", closeErr
 	}
 	return "/uploads/" + filename, nil
