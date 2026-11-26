@@ -25,7 +25,7 @@ func LoadConfig() *Config {
 
 	return &Config{
 		MongoURI:         getEnv("MONGO_URI", "mongodb://localhost:27017/huasteca"),
-		JWT_SECRET:       getEnv("JWT_SECRET", "default-secret"),
+		JWT_SECRET: requireEnv("JWT_SECRET"),
 		GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", ""),
 		PORT:             getEnv("PORT", "8080"),
 		CORS_ORIGINS:     getEnv("CORS_ORIGINS", "http://localhost:4200"),
