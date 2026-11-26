@@ -3,6 +3,10 @@ package middleware
 import (
 	"net/http"
 	"fmt"
+	"context"
+	"time"
+	"go.mongodb.org/mongo-driver/bson"
+	"huasteca-backend/internal/database"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -55,8 +59,16 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		var user models.User
+		if err := database.GetCollection("users").FindOne(ctx, bson.M{"_id": userID}).Decode(&user); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User account unavailable"})
+			c.Abort()
+			return
+		}
 		c.Set("user_id", userID)
-		c.Set("role", models.Role(claims.Role))
+		c.Set("role", user.Role)
 		c.Next()
 	}
 }
