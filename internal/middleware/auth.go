@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"fmt"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -35,8 +36,11 @@ func AuthMiddleware(jwtSecret string) gin.HandlerFunc {
 
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, fmt.Errorf("unexpected JWT signing method: %s", token.Method.Alg())
+			}
 			return []byte(jwtSecret), nil
-		})
+		}, jwt.WithValidMethods([]string{"HS256"}))
 
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
