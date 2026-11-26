@@ -2,11 +2,7 @@ package controllers
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -270,51 +266,14 @@ func (pc *ProductController) DeleteProduct(c *gin.Context) {
 }
 
 func (pc *ProductController) UploadImage(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	if _, exists := c.Get("user_id"); !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
-	file, header, err := c.Request.FormFile("image")
+	url, err := saveValidatedImage(c, "product_")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Image file required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image or upload failed"})
 		return
 	}
-	defer file.Close()
-
-	if header.Size > 2*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File size must be less than 2MB"})
-		return
-	}
-
-	contentType := header.Header.Get("Content-Type")
-	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/gif" && contentType != "image/webp" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only image files are allowed"})
-		return
-	}
-
-	ext := filepath.Ext(header.Filename)
-	filename := fmt.Sprintf("%d_%s%s", time.Now().Unix(), userID.(primitive.ObjectID).Hex(), ext)
-	uploadPath := filepath.Join("./public/uploads", filename)
-
-	if err := os.MkdirAll("./public/uploads", 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
-		return
-	}
-
-	out, err := os.Create(uploadPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create file"})
-		return
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
-		return
-	}
-
-	relativePath := fmt.Sprintf("/uploads/%s", filename)
-	c.JSON(http.StatusOK, gin.H{"url": relativePath})
+	c.JSON(http.StatusOK, gin.H{"url": url})
 }
