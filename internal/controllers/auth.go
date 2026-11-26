@@ -3,10 +3,10 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
+		"log"
 	"net/http"
 	"os"
+	"strings"
 	"path/filepath"
 	"time"
 
@@ -36,28 +36,26 @@ type GoogleAuthRequest struct {
 }
 
 func validateGoogleAccessToken(accessToken string, clientID string) (map[string]interface{}, error) {
-	// Use Google's tokeninfo endpoint to validate the access token
-	url := "https://oauth2.googleapis.com/tokeninfo?access_token=" + accessToken
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
+	req, err := http.NewRequest(http.MethodGet, "https://oauth2.googleapis.com/tokeninfo", nil)
+	if err != nil { return nil, err }
+	q := req.URL.Query()
+	q.Set("access_token", accessToken)
+	req.URL.RawQuery = q.Encode()
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil { return nil, err }
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("invalid token: status %d", resp.StatusCode)
-	}
-
+	if resp.StatusCode != http.StatusOK { return nil, fmt.Errorf("invalid token: status %d", resp.StatusCode) }
 	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	// Verify audience matches our client ID
-	if aud, ok := result["aud"].(string); ok && aud != clientID {
-		return nil, fmt.Errorf("audience mismatch")
-	}
-
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil { return nil, err }
+	aud, ok := result["aud"].(string)
+	if !ok || aud != clientID { return nil, fmt.Errorf("audience mismatch") }
+	email, ok := result["email"].(string)
+	if !ok || email == "" { return nil, fmt.Errorf("email missing") }
+	verified, ok := result["email_verified"].(bool)
+	if !ok || !verified { return nil, fmt.Errorf("email not verified") }
+	sub, ok := result["sub"].(string)
+	if !ok || sub == "" { return nil, fmt.Errorf("subject missing") }
 	return result, nil
 }
 
@@ -170,37 +168,40 @@ func (ac *AuthController) UpdateProfile(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
 	var req struct {
-		Name       string `json:"name"`
-		PictureURL string `json:"picture_url"`
+		Name *string `json:"name"`
+		PictureURL *string `json:"picture_url"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
-
-	usersCollection := database.GetCollection("users")
-
-	update := bson.M{
-		"$set": bson.M{
-			"name":        req.Name,
-			"picture_url":  req.PictureURL,
-			"updated_at":  time.Now(),
-		},
+	set := bson.M{"updated_at": time.Now()}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Name cannot be empty"})
+			return
+		}
+		set["name"] = name
 	}
-
-	_, err := usersCollection.UpdateOne(c.Request.Context(), bson.M{"_id": userID}, update)
+	if req.PictureURL != nil { set["picture_url"] = *req.PictureURL }
+	if len(set) == 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No profile fields provided"})
+		return
+	}
+	usersCollection := database.GetCollection("users")
+	var updated models.User
+	err := usersCollection.FindOneAndUpdate(c.Request.Context(), bson.M{"_id": userID}, bson.M{"$set": set}, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&updated)
 	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile"})
 		return
 	}
-
-	var updatedUser models.User
-	usersCollection.FindOne(c.Request.Context(), bson.M{"_id": userID}).Decode(&updatedUser)
-
-	c.JSON(http.StatusOK, gin.H{"user": updatedUser})
+	c.JSON(http.StatusOK, gin.H{"user": updated})
 }
 
 func (ac *AuthController) GetUsers(c *gin.Context) {
@@ -228,61 +229,17 @@ func (ac *AuthController) UploadProfileImage(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
-
-	file, header, err := c.Request.FormFile("image")
+	url, err := saveValidatedImage(c, "profile_")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Image file required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image or upload failed"})
 		return
 	}
-	defer file.Close()
-
-	if header.Size > 2*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File size must be less than 2MB"})
-		return
-	}
-
-	contentType := header.Header.Get("Content-Type")
-	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/gif" && contentType != "image/webp" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only image files are allowed"})
-		return
-	}
-
-	ext := filepath.Ext(header.Filename)
-	filename := fmt.Sprintf("profile_%d_%s%s", time.Now().Unix(), userID.(primitive.ObjectID).Hex(), ext)
-	uploadPath := filepath.Join("./public/uploads", filename)
-
-	if err := os.MkdirAll("./public/uploads", 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
-		return
-	}
-
-	out, err := os.Create(uploadPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create file"})
-		return
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
-		return
-	}
-
-	relativePath := fmt.Sprintf("/uploads/%s", filename)
-
 	usersCollection := database.GetCollection("users")
-	update := bson.M{
-		"$set": bson.M{
-			"picture_url": relativePath,
-			"updated_at":  time.Now(),
-		},
-	}
-
-	_, err = usersCollection.UpdateOne(c.Request.Context(), bson.M{"_id": userID}, update)
+	_, err = usersCollection.UpdateOne(c.Request.Context(), bson.M{"_id": userID}, bson.M{"$set": bson.M{"picture_url": url, "updated_at": time.Now()}})
 	if err != nil {
+		_ = os.Remove(filepath.Join("./public/uploads", filepath.Base(url)))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile picture"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"url": relativePath, "message": "Profile picture updated"})
+	c.JSON(http.StatusOK, gin.H{"url": url, "message": "Profile picture updated"})
 }
