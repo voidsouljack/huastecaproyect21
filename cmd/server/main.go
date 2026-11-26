@@ -35,7 +35,7 @@ func main() {
 	}()
 
 	if err := database.CreateIndexes(); err != nil {
-		log.Printf("Warning: Failed to create indexes: %v", err)
+		log.Fatalf("Failed to create database indexes: %v", err)
 	}
 
 	r := gin.Default()
@@ -63,6 +63,15 @@ func main() {
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+	r.GET("/ready", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := database.Client.Ping(ctx, nil); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
 	authController := controllers.NewAuthController(cfg)
