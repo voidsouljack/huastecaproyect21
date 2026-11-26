@@ -58,3 +58,12 @@ func (c *Config) GetServerAddress() string {
 func (c *Config) GetCORSOrigins() []string {
 	return strings.Split(c.CORS_ORIGINS, ",")
 }
+func requireEnv(key string) string {
+    value := strings.TrimSpace(os.Getenv(key))
+
+    if value == "" {
+        log.Fatalf("Falta configurar la variable requerida: %s", key)
+    }
+
+    return value
+}
