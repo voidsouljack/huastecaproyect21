@@ -42,18 +42,31 @@ func GetCollection(name string) *mongo.Collection {
 }
 
 func CreateIndexes() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	usersCollection := GetCollection("users")
-	indexModel := mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
+	userEmailIndex := mongo.IndexModel{
+		Keys: bson.D{{Key: "email", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
-	_, err := usersCollection.Indexes().CreateOne(ctx, indexModel)
-	if err != nil {
+	if _, err := usersCollection.Indexes().CreateOne(ctx, userEmailIndex); err != nil {
 		return fmt.Errorf("failed to create email index: %w", err)
 	}
 
+	indexes := []struct {
+		collection string
+		keys bson.D
+	}{
+		{"products", bson.D{{Key: "vendedor_id", Value: 1}, {Key: "created_at", Value: -1}}},
+		{"ventas", bson.D{{Key: "comprador_id", Value: 1}, {Key: "fecha", Value: -1}}},
+		{"ventas", bson.D{{Key: "vendedor_id", Value: 1}, {Key: "fecha", Value: -1}}},
+	}
+	for _, idx := range indexes {
+		if _, err := GetCollection(idx.collection).Indexes().CreateOne(ctx, mongo.IndexModel{Keys: idx.keys}); err != nil {
+			return fmt.Errorf("failed to create index on %s: %w", idx.collection, err)
+		}
+	}
 	log.Println("Indexes created successfully")
 	return nil
 }
