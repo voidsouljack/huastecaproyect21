@@ -42,22 +42,38 @@ func GetCollection(name string) *mongo.Collection {
 }
 
 func CreateIndexes() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	usersCollection := GetCollection("users")
-	indexModel := mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
+	emailIndex := mongo.IndexModel{
+		Keys: bson.D{{Key: "email", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
-	_, err := usersCollection.Indexes().CreateOne(ctx, indexModel)
-	if err != nil {
+	if _, err := usersCollection.Indexes().CreateOne(ctx, emailIndex); err != nil {
 		return fmt.Errorf("failed to create email index: %w", err)
+	}
+
+	productsCollection := GetCollection("products")
+	productIndexes := []mongo.IndexModel{
+		{Keys: bson.D{{Key: "vendedor_id", Value: 1}}},
+	}
+	if _, err := productsCollection.Indexes().CreateMany(ctx, productIndexes); err != nil {
+		return fmt.Errorf("failed to create product indexes: %w", err)
+	}
+
+	ventasCollection := GetCollection("ventas")
+	ventaIndexes := []mongo.IndexModel{
+		{Keys: bson.D{{Key: "comprador_id", Value: 1}, {Key: "fecha", Value: -1}}},
+		{Keys: bson.D{{Key: "vendedor_id", Value: 1}, {Key: "fecha", Value: -1}}},
+	}
+	if _, err := ventasCollection.Indexes().CreateMany(ctx, ventaIndexes); err != nil {
+		return fmt.Errorf("failed to create sales indexes: %w", err)
 	}
 
 	log.Println("Indexes created successfully")
 	return nil
 }
-
 func Disconnect(ctx context.Context) error {
 	if Client != nil {
 		return Client.Disconnect(ctx)

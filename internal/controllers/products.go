@@ -3,19 +3,41 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"huasteca-backend/internal/database"
 	"huasteca-backend/internal/models"
 )
+
+
+// parsePagination validates query parameters and applies a maximum page size.
+func parsePagination(c *gin.Context) (int, int, error) {
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 || page > 1_000_000 {
+		return 0, 0, fmt.Errorf("page debe ser un entero mayor a cero")
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if err != nil || limit < 1 {
+		return 0, 0, fmt.Errorf("limit debe ser un entero mayor a cero")
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return page, limit, nil
+}
+
+func paginationResponse(page, limit int, total int64) gin.H {
+	totalPages := (total + int64(limit) - 1) / int64(limit)
+	return gin.H{"page": page, "limit": limit, "total": total, "totalPages": totalPages}
+}
 
 type ProductController struct{}
 
@@ -29,28 +51,37 @@ func (pc *ProductController) GetProducts(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	cursor, err := productsCollection.Find(ctx, bson.M{})
+	page, limit, err := parsePagination(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	filter := bson.M{}
+	total, err := productsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count products"})
+		return
+	}
+	cursor, err := productsCollection.Find(ctx, filter, options.Find().
+		SetSkip(int64((page-1)*limit)).
+		SetLimit(int64(limit)).
+		SetSort(bson.D{{Key: "created_at", Value: -1}}))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch products"})
 		return
 	}
 	defer cursor.Close(ctx)
 
-	var products []models.Product
+	products := make([]models.Product, 0, limit)
 	if err := cursor.All(ctx, &products); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode products"})
 		return
 	}
 
-	// Convert relative URLs to absolute URLs
-	baseURL := "http://" + c.Request.Host
-	for i := range products {
-		if products[i].ImagenURL != "" && products[i].ImagenURL[0] == '/' {
-			products[i].ImagenURL = baseURL + products[i].ImagenURL
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"products": products})
+	c.JSON(http.StatusOK, gin.H{
+		"products": products,
+		"pagination": paginationResponse(page, limit, total),
+	})
 }
 
 func (pc *ProductController) GetProduct(c *gin.Context) {
@@ -70,11 +101,6 @@ func (pc *ProductController) GetProduct(c *gin.Context) {
 		return
 	}
 
-	// Convert relative URL to absolute URL
-	baseURL := "http://" + c.Request.Host
-	if product.ImagenURL != "" && product.ImagenURL[0] == '/' {
-		product.ImagenURL = baseURL + product.ImagenURL
-	}
 
 	c.JSON(http.StatusOK, gin.H{"product": product})
 }
@@ -220,9 +246,13 @@ func (pc *ProductController) UpdateProduct(c *gin.Context) {
 	    "$set": updateFields,
 	}
 
-	_, err = productsCollection.UpdateOne(c.Request.Context(), bson.M{"_id": productID}, update)
+	result, err := productsCollection.UpdateOne(c.Request.Context(), bson.M{"_id": productID}, update)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update product"})
+		return
+	}
+	if result.MatchedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
 		return
 	}
 
@@ -276,45 +306,12 @@ func (pc *ProductController) UploadImage(c *gin.Context) {
 		return
 	}
 
-	file, header, err := c.Request.FormFile("image")
+	filename, err := saveValidatedImage(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Image file required"})
-		return
-	}
-	defer file.Close()
-
-	if header.Size > 2*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File size must be less than 2MB"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	contentType := header.Header.Get("Content-Type")
-	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/gif" && contentType != "image/webp" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only image files are allowed"})
-		return
-	}
-
-	ext := filepath.Ext(header.Filename)
-	filename := fmt.Sprintf("%d_%s%s", time.Now().Unix(), userID.(primitive.ObjectID).Hex(), ext)
-	uploadPath := filepath.Join("./public/uploads", filename)
-
-	if err := os.MkdirAll("./public/uploads", 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create upload directory"})
-		return
-	}
-
-	out, err := os.Create(uploadPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create file"})
-		return
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
-		return
-	}
-
-	relativePath := fmt.Sprintf("/uploads/%s", filename)
+	relativePath := "/uploads/" + filename
 	c.JSON(http.StatusOK, gin.H{"url": relativePath})
 }

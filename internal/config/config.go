@@ -25,7 +25,7 @@ func LoadConfig() *Config {
 
 	return &Config{
 		MongoURI: requireEnv("MONGO_URI"),
-		JWT_SECRET: requireEnv("JWT_SECRET"),
+		JWT_SECRET: requireSecretEnv("JWT_SECRET"),
 		GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", ""),
 		PORT:             getEnv("PORT", "8080"),
 		CORS_ORIGINS:     getEnv("CORS_ORIGINS", "http://localhost:4200"),
@@ -56,8 +56,24 @@ func (c *Config) GetServerAddress() string {
 }
 
 func (c *Config) GetCORSOrigins() []string {
-	return strings.Split(c.CORS_ORIGINS, ",")
+	raw := strings.Split(c.CORS_ORIGINS, ",")
+	origins := make([]string, 0, len(raw))
+	for _, origin := range raw {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
 }
+func requireSecretEnv(key string) string {
+	value := requireEnv(key)
+	if len(value) < 32 {
+		log.Fatalf("%s must be at least 32 characters long", key)
+	}
+	return value
+}
+
 func requireEnv(key string) string {
     value := strings.TrimSpace(os.Getenv(key))
 

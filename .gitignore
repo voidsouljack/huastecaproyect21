@@ -1,5 +1,23 @@
-mongodb-data/
-*.log
+# Environment secrets
 .env
-huasteca-server
-huasteca-server-prod
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# MongoDB local data
+mongodb-data/
+
+# Compiled Go binaries
+/huasteca-backend
+/huasteca-server
+/huasteca-server-prod
+
+# Build output
+/bin/
+/dist/
+
+# Temporary files
+*.tmp
+*.bak

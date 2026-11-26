@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -34,7 +35,7 @@ func main() {
 	}()
 
 	if err := database.CreateIndexes(); err != nil {
-		log.Printf("Warning: Failed to create indexes: %v", err)
+		log.Fatalf("Failed to create required indexes: %v", err)
 	}
 
 	r := gin.Default()
@@ -44,7 +45,7 @@ func main() {
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
 	corsConfig.AllowCredentials = true
-	corsConfig.MaxAge = 12 * 60 * 60
+	corsConfig.MaxAge = 12 * time.Hour
 	r.Use(cors.New(corsConfig))
 
 	r.Static("/uploads", "./public/uploads")
@@ -53,11 +54,26 @@ func main() {
 	r.Static("/assets", "./public/assets")
 	r.StaticFile("/favicon.ico", "./public/favicon.ico")
 	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if path == "/api" || strings.HasPrefix(path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API route not found"})
+			return
+		}
 		c.File("./public/index.html")
 	})
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	r.GET("/ready", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := database.Client.Ping(ctx, nil); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "database": "disconnected"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready", "database": "connected"})
 	})
 
 	authController := controllers.NewAuthController(cfg)
@@ -108,8 +124,13 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    cfg.GetServerAddress(),
-		Handler: r,
+		Addr:              cfg.GetServerAddress(),
+		Handler:            r,
+		ReadHeaderTimeout:   5 * time.Second,
+		ReadTimeout:         15 * time.Second,
+		WriteTimeout:        30 * time.Second,
+		IdleTimeout:         60 * time.Second,
+		MaxHeaderBytes:      1 << 20,
 	}
 
 	go func() {
