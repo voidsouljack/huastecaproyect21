@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +54,10 @@ func main() {
 	r.Static("/assets", "./public/assets")
 	r.StaticFile("/favicon.ico", "./public/favicon.ico")
 	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API route not found"})
+			return
+		}
 		c.File("./public/index.html")
 	})
 
@@ -108,8 +113,13 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    cfg.GetServerAddress(),
+		Addr: cfg.GetServerAddress(),
 		Handler: r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	go func() {
