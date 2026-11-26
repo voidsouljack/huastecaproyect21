@@ -37,6 +37,7 @@ type GoogleAuthRequest struct {
 }
 
 func validateGoogleAccessToken(accessToken string, clientID string) (map[string]interface{}, error) {
+	if strings.TrimSpace(clientID) == "" { return nil, fmt.Errorf("Google client ID not configured") }
 	req, err := http.NewRequest(http.MethodGet, "https://oauth2.googleapis.com/tokeninfo", nil)
 	if err != nil { return nil, err }
 	q := req.URL.Query()
@@ -87,7 +88,7 @@ func (ac *AuthController) GoogleAuth(c *gin.Context) {
 	err = usersCollection.FindOne(c.Request.Context(), bson.M{"email": email}).Decode(&existingUser)
 
 	if err == nil {
-		log.Printf("[LOGIN] User logged in: email=%s, role=%s", email, existingUser.Role)
+		log.Printf("[LOGIN] Existing user authenticated")
 		token, err := generateJWT(existingUser.ID.Hex(), string(existingUser.Role), ac.cfg.GetJWTKey())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
@@ -115,11 +116,11 @@ func (ac *AuthController) GoogleAuth(c *gin.Context) {
 
 	_, err = usersCollection.InsertOne(c.Request.Context(), newUser)
 	if err != nil {
-		log.Printf("[ERROR] Failed to create user: email=%s, error=%v", email, err)
+		log.Printf("[ERROR] Failed to create user record: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
-	log.Printf("[REGISTER] New user registered: email=%s, role=CLIENTE (default), google_id=%s", email, sub)
+	log.Printf("[REGISTER] New client account created")
 
 	token, err := generateJWT(newUser.ID.Hex(), string(newUser.Role), ac.cfg.GetJWTKey())
 	if err != nil {
