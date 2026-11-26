@@ -39,6 +39,8 @@ func (pc *ProductController) GetProducts(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count products"})
 		return
 	}
+	pages := (total + limit - 1) / limit
+	if pages < 1 { page = 1 } else if page > pages { page = pages }
 	findOpts := options.Find().SetSkip((page-1)*limit).SetLimit(limit).SetSort(bson.D{{Key:"created_at", Value:-1}})
 	cursor, err := productsCollection.Find(ctx, filter, findOpts)
 	if err != nil {
@@ -52,7 +54,7 @@ func (pc *ProductController) GetProducts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"products": products, "pagination": gin.H{"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) / limit}})
+	c.JSON(http.StatusOK, gin.H{"products": products, "pagination": gin.H{"page": page, "limit": limit, "total": total, "pages": pages}})
 }
 
 func (pc *ProductController) GetProduct(c *gin.Context) {
