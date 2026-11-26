@@ -52,7 +52,7 @@ func (pc *ProductController) GetProducts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"products": products})
+	c.JSON(http.StatusOK, gin.H{"products": products, "pagination": gin.H{"page": page, "limit": limit, "total": total, "pages": (total + limit - 1) / limit}})
 }
 
 func (pc *ProductController) GetProduct(c *gin.Context) {
