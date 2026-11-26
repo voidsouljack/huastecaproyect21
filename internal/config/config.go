@@ -56,7 +56,15 @@ func (c *Config) GetServerAddress() string {
 }
 
 func (c *Config) GetCORSOrigins() []string {
-	return strings.Split(c.CORS_ORIGINS, ",")
+	parts := strings.Split(c.CORS_ORIGINS, ",")
+	origins := make([]string, 0, len(parts))
+	for _, origin := range parts {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
 }
 func requireEnv(key string) string {
     value := strings.TrimSpace(os.Getenv(key))
