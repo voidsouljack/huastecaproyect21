@@ -3,3 +3,23 @@ mongodb-data/
 .env
 huasteca-server
 huasteca-server-prod
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Go binaries and build output
+/huasteca-backend
+/huasteca-server
+/huasteca-server-prod
+/bin/
+/dist/
+/build/
+
+# Logs and local data
+*.log
+mongodb-data/
+*.sqlite
+*.db
+*.tmp
