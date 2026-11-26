@@ -139,11 +139,11 @@ func (pc *ProductController) UpdateProduct(c *gin.Context) {
 	}
 
 	type ProductInput struct {
-		Nombre      string  `json:"nombre"`
-		Descripcion string  `json:"descripcion"`
-		Precio      float64 `json:"precio"`
-		Stock       int     `json:"stock"`
-		ImagenURL   string  `json:"imagen_url"`
+	    Nombre      *string  `json:"nombre"`
+	    Descripcion *string  `json:"descripcion"`
+	    Precio      *float64 `json:"precio"`
+	    Stock       *int     `json:"stock"`
+	    ImagenURL   *string  `json:"imagen_url"`
 	}
 
 	var input ProductInput
@@ -169,26 +169,55 @@ func (pc *ProductController) UpdateProduct(c *gin.Context) {
 		return
 	}
 
+	updateFields := bson.M{
+	    "updated_at": time.Now(),
+	}
+	
+	if input.Nombre != nil {
+	    nombre := strings.TrimSpace(*input.Nombre)
+	
+	    if nombre == "" {
+	        c.JSON(http.StatusBadRequest, gin.H{
+	            "error": "El nombre no puede estar vacío",
+	        })
+	        return
+	    }
+	
+	    updateFields["nombre"] = nombre
+	}
+	
+	if input.Descripcion != nil {
+	    updateFields["descripcion"] = *input.Descripcion
+	}
+	
+	if input.Precio != nil {
+	    if *input.Precio <= 0 {
+	        c.JSON(http.StatusBadRequest, gin.H{
+	            "error": "El precio debe ser mayor a cero",
+	        })
+	        return
+	    }
+	
+	    updateFields["precio"] = *input.Precio
+	}
+	
+	if input.Stock != nil {
+	    if *input.Stock < 0 {
+	        c.JSON(http.StatusBadRequest, gin.H{
+	            "error": "El stock no puede ser negativo",
+	        })
+	        return
+	    }
+	
+	    updateFields["stock"] = *input.Stock
+	}
+	
+	if input.ImagenURL != nil {
+	    updateFields["imagen_url"] = *input.ImagenURL
+	}
+	
 	update := bson.M{
-		"$set": bson.M{
-			"updated_at": time.Now(),
-		},
-	}
-
-	if input.Nombre != "" {
-		update["$set"].(bson.M)["nombre"] = input.Nombre
-	}
-	if input.Descripcion != "" {
-		update["$set"].(bson.M)["descripcion"] = input.Descripcion
-	}
-	if input.Precio > 0 {
-		update["$set"].(bson.M)["precio"] = input.Precio
-	}
-	if input.Stock >= 0 {
-		update["$set"].(bson.M)["stock"] = input.Stock
-	}
-	if input.ImagenURL != "" {
-		update["$set"].(bson.M)["imagen_url"] = input.ImagenURL
+	    "$set": updateFields,
 	}
 
 	_, err = productsCollection.UpdateOne(c.Request.Context(), bson.M{"_id": productID}, update)
