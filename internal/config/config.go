@@ -72,6 +72,9 @@ func requireEnv(key string) string {
     if value == "" {
         log.Fatalf("Falta configurar la variable requerida: %s", key)
     }
+    if key == "JWT_SECRET" && len(value) < 32 {
+        log.Fatalf("JWT_SECRET debe tener al menos 32 caracteres")
+    }
 
     return value
 }
