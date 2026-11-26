@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -58,6 +59,21 @@ func main() {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API route not found"})
 			return
 		}
+
+		// Serve root-level Angular build files (JS, CSS, images, etc.) when present.
+		requested := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if requested != "" {
+			cleanPath := filepath.Clean(requested)
+			filePath := filepath.Join("public", cleanPath)
+			if strings.HasPrefix(filePath, "public"+string(filepath.Separator)) {
+				if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+					c.File(filePath)
+					return
+				}
+			}
+		}
+
+		// For client-side Angular routes, fall back to the SPA entry point.
 		c.File("./public/index.html")
 	})
 
