@@ -41,6 +41,10 @@ func GetCollection(name string) *mongo.Collection {
 	return DB.Collection(name)
 }
 
+// CreateIndexes keeps the unique email index as a startup requirement because it
+// protects account uniqueness. Other indexes are performance optimizations; if
+// MongoDB is constrained by disk space, log the failure but allow the service
+// to start so the application remains available.
 func CreateIndexes() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -51,7 +55,7 @@ func CreateIndexes() error {
 		Options: options.Index().SetUnique(true),
 	}
 	if _, err := usersCollection.Indexes().CreateOne(ctx, userEmailIndex); err != nil {
-		return fmt.Errorf("failed to create email index: %w", err)
+		return fmt.Errorf("failed to create required unique email index: %w", err)
 	}
 
 	indexes := []struct {
@@ -64,10 +68,10 @@ func CreateIndexes() error {
 	}
 	for _, idx := range indexes {
 		if _, err := GetCollection(idx.collection).Indexes().CreateOne(ctx, mongo.IndexModel{Keys: idx.keys}); err != nil {
-			return fmt.Errorf("failed to create index on %s: %w", idx.collection, err)
+			log.Printf("WARNING: optional index on %s not created; app will start without it: %v", idx.collection, err)
 		}
 	}
-	log.Println("Indexes created successfully")
+	log.Println("Index initialization completed (optional index failures are non-fatal)")
 	return nil
 }
 
