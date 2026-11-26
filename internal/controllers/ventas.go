@@ -78,41 +78,97 @@ func (vc *VentasController) CreateVenta(c *gin.Context) {
 		return
 	}
 
-	productsCollection := database.GetCollection("products")
-	var product models.Product
-	err = productsCollection.FindOne(c.Request.Context(), bson.M{"_id": productoID}).Decode(&product)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
-		return
-	}
+productsCollection := database.GetCollection("products")
+ventasCollection := database.GetCollection("ventas")
 
-	if product.Stock < input.Cantidad {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Not enough stock"})
-		return
-	}
+ctx, cancel := context.WithTimeout(
+    c.Request.Context(),
+    10*time.Second,
+)
+defer cancel()
 
-	total := product.Precio * float64(input.Cantidad)
+session, err := database.Client.StartSession()
+if err != nil {
+    c.JSON(http.StatusInternalServerError, gin.H{
+        "error": "No se pudo iniciar la transacción",
+    })
+    return
+}
+defer session.EndSession(ctx)
 
-	ventasCollection := database.GetCollection("ventas")
-	venta := models.Venta{
-		ID:             primitive.NewObjectID(),
-		ProductoID:    productoID,
-		ProductoNombre: product.Nombre,
-		Cantidad:     input.Cantidad,
-		PrecioUnitario: product.Precio,
-		Total:       total,
-		CompradorID: userID,
-		VendedorID:  product.VendedorID,
-		Fecha:       time.Now(),
-	}
+var ventaCreada models.Venta
 
-	_, err = ventasCollection.InsertOne(c.Request.Context(), venta)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create sale"})
-		return
-	}
+_, err = session.WithTransaction(ctx, func(sc mongo.SessionContext) (interface{}, error) {
 
-	productsCollection.UpdateOne(c.Request.Context(), bson.M{"_id": productoID}, bson.M{"$set": bson.M{"stock": product.Stock - input.Cantidad, "updated_at": time.Now()}})
+    // 1. Obtener producto dentro de la transacción.
+    var product models.Product
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Purchase completed", "venta": venta})
+    err := productsCollection.FindOne(
+        sc,
+        bson.M{"_id": productoID},
+    ).Decode(&product)
+
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. Descontar inventario de forma atómica.
+    stockResult, err := productsCollection.UpdateOne(
+        sc,
+        bson.M{
+            "_id": productoID,
+            "stock": bson.M{
+                "$gte": input.Cantidad,
+            },
+        },
+        bson.M{
+            "$inc": bson.M{
+                "stock": -input.Cantidad,
+            },
+            "$set": bson.M{
+                "updated_at": time.Now(),
+            },
+        },
+    )
+
+    if err != nil {
+        return nil, err
+    }
+
+    if stockResult.MatchedCount == 0 {
+        return nil, fmt.Errorf("stock insuficiente")
+    }
+
+    // 3. Registrar la venta.
+    ventaCreada = models.Venta{
+        ID:             primitive.NewObjectID(),
+        ProductoID:     productoID,
+        ProductoNombre: product.Nombre,
+        Cantidad:       input.Cantidad,
+        PrecioUnitario: product.Precio,
+        Total:          product.Precio * float64(input.Cantidad),
+        CompradorID:    userID,
+        VendedorID:     product.VendedorID,
+        Fecha:          time.Now(),
+    }
+
+    _, err = ventasCollection.InsertOne(sc, ventaCreada)
+    if err != nil {
+        return nil, err
+    }
+
+    return ventaCreada, nil
+})
+
+if err != nil {
+    c.JSON(http.StatusConflict, gin.H{
+        "error": "No se pudo completar la compra. Verifica el stock disponible.",
+    })
+    return
+}
+
+c.JSON(http.StatusCreated, gin.H{
+    "message": "Purchase completed",
+    "venta":   ventaCreada,
+})
 }
