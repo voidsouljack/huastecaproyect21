@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"huasteca-backend/internal/database"
 	"huasteca-backend/internal/models"
@@ -29,25 +32,28 @@ func (pc *ProductController) GetProducts(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	cursor, err := productsCollection.Find(ctx, bson.M{})
+	page, _ := strconv.ParseInt(c.DefaultQuery("page", "1"), 10, 64)
+	limit, _ := strconv.ParseInt(c.DefaultQuery("limit", "20"), 10, 64)
+	if page < 1 { page = 1 }
+	if limit < 1 { limit = 20 }
+	if limit > 100 { limit = 100 }
+	filter := bson.M{}
+	total, err := productsCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count products"})
+		return
+	}
+	findOpts := options.Find().SetSkip((page-1)*limit).SetLimit(limit).SetSort(bson.D{{Key:"created_at", Value:-1}})
+	cursor, err := productsCollection.Find(ctx, filter, findOpts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch products"})
 		return
 	}
 	defer cursor.Close(ctx)
-
 	var products []models.Product
 	if err := cursor.All(ctx, &products); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode products"})
 		return
-	}
-
-	// Convert relative URLs to absolute URLs
-	baseURL := "http://" + c.Request.Host
-	for i := range products {
-		if products[i].ImagenURL != "" && products[i].ImagenURL[0] == '/' {
-			products[i].ImagenURL = baseURL + products[i].ImagenURL
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"products": products})
@@ -68,12 +74,6 @@ func (pc *ProductController) GetProduct(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
 		return
-	}
-
-	// Convert relative URL to absolute URL
-	baseURL := "http://" + c.Request.Host
-	if product.ImagenURL != "" && product.ImagenURL[0] == '/' {
-		product.ImagenURL = baseURL + product.ImagenURL
 	}
 
 	c.JSON(http.StatusOK, gin.H{"product": product})
